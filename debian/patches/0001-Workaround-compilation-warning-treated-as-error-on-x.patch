@@ -1,0 +1,41 @@
+From fc1a110107773c28b84295b756d5399081360d56 Mon Sep 17 00:00:00 2001
+From: Mark Hindley <mark@hindley.org.uk>
+Date: Sat, 1 Jan 2022 09:34:31 +0000
+Subject: [PATCH] Workaround compilation warning treated as error on x32 with
+ cast.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+./common/log.c:59:45: error: format ‘%ld’ expects argument of type ‘long int’, but argument 6 has type ‘__syscall_slong_t’ {aka ‘long long int’} [-Werror=format=]
+   59 |         fprintf(stderr, "%02d:%02d:%02d.%03ld %s ", (int)(ts.tv_sec / 60 / 60),
+      |                                         ~~~~^
+      |                                             |
+      |                                             long int
+      |                                         %03lld
+   60 |                 (int)(ts.tv_sec / 60 % 60), (int)(ts.tv_sec % 60), ts.tv_nsec / 1000000, prefix);
+      |                                                                    ~~~~~~~~~~~~~~~~~~~~
+      |                                                                               |
+      |                                                                               __syscall_slong_t {aka long long int}
+cc1: all warnings being treated as errors
+[3/42] cc -Ilibseat-private.a.p -I. -I.. -I../include -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -Werror -std=c11 -Wundef -Wunused -Wlogical-op -Wmissing-include-dirs -Wold-style-definition -Wpointer-arith -Wstrict-prototypes -Wimplicit-fallthrough -Wmissing-prototypes -Wvla -Wl,--exclude-libs=ALL -D_XOPEN_SOURCE=700 -D__BSD_VISIBLE '-DSEATD_VERSION="0.6.3"' '-DSEATD_DEFAULTPATH="/run/seatd.sock"' '-DSEATD_INSTALLPATH="/usr/sbin/seatd"' '-DREL_SRC_DIR="../"' -DSEATD_ENABLED=1 -DLOGIND_ENABLED=1 -DHAVE_SYSTEMD=1 -DBUILTIN_ENABLED=1 -g -O2 -ffile-prefix-map=/<<PKGBUILDDIR>>=. -fstack-protector-strong -Wformat -Werror=format-security -Wdate-time -D_FORTIFY_SOURCE=2 -fPIC -MD -MQ libseat-private.a.p/common_connection.c.o -MF libseat-private.a.p/common_connection.c.o.d -o libseat-private.a.p/common_connection.c.o -c ../common/connection.c
+ninja: build stopped: subcommand failed.
+dh_auto_build: error: cd obj-x86_64-linux-gnux32 && LC_ALL=C.UTF-8 ninja -j2 -v returned exit code 1
+make: *** [debian/rules:4: binary-arch] Error 25
+
+The issue is https://sourceware.org/bugzilla/show_bug.cgi?id=16437.
+---
+ common/log.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/common/log.c
++++ b/common/log.c
+@@ -57,7 +57,7 @@
+ 	}
+ 
+ 	fprintf(stderr, "%02d:%02d:%02d.%03ld %s ", (int)(ts.tv_sec / 60 / 60),
+-		(int)(ts.tv_sec / 60 % 60), (int)(ts.tv_sec % 60), ts.tv_nsec / 1000000, prefix);
++		(int)(ts.tv_sec / 60 % 60), (int)(ts.tv_sec % 60), (long int)(ts.tv_nsec / 1000000), prefix);
+ 
+ 	vfprintf(stderr, fmt, args);
+ 

@@ -1,0 +1,3 @@
+usr/include/
+usr/lib/*/libseat.so
+usr/lib/*/pkgconfig/

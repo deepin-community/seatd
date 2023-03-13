@@ -1,0 +1,25 @@
+From a0692ed5fa4cfbe7429b525eb1e17624b956ef38 Mon Sep 17 00:00:00 2001
+From: Mark Hindley <mark@hindley.org.uk>
+Date: Wed, 22 Jun 2022 22:43:19 +0100
+Subject: [PATCH] Use shared_library()
+
+---
+ meson.build | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index 661b39a..82ec1f9 100644
+--- a/meson.build
++++ b/meson.build
+@@ -176,7 +176,7 @@ private_lib = static_library(
+ 
+ symbols_file = 'libseat/libseat.syms'
+ symbols_flag = '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), symbols_file)
+-lib = library(
++lib = shared_library(
+ 	'seat', # This results in the library being called 'libseat'
+ 	[ 'libseat/libseat.c', 'libseat/backend/noop.c' ],
+ 	soversion: '@0@'.format(libseat_soversion),
+-- 
+2.35.1
+

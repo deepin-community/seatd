@@ -1,0 +1,3 @@
+usr/bin/seatd /usr/sbin/
+usr/bin/seatd-launch /usr/bin/
+usr/share/man/man*/

@@ -1,0 +1,6 @@
+# watch control file for uscan
+# See uscan(1) for format
+
+version=4
+
+https://git.sr.ht/~kennylevinsen/seatd/refs /~kennylevinsen/seatd/archive/(.+)\.tar\.gz
