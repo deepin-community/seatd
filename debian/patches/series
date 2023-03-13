@@ -1,0 +1,4 @@
+0003-Meson_build-use-shared_library.patch
+0001-Workaround-compilation-warning-treated-as-error-on-x.patch
+0002-Set-seatd-path-in-seatd-launch.patch
+0001-Move-seatd-manpage-to-section-8.patch

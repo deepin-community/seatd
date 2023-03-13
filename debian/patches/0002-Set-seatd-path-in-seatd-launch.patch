@@ -1,0 +1,21 @@
+From ce4a50bfe5b5defc7ccb31d10ceed6726f17c866 Mon Sep 17 00:00:00 2001
+From: Mark Hindley <mark@hindley.org.uk>
+Date: Sun, 26 Dec 2021 12:23:31 +0000
+Subject: [PATCH] Set seatd path in seatd-launch.
+
+The path is hardcoded and needs to match the installation path in /usr/sbin/.
+---
+ meson.build                      | 1 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+--- a/meson.build
++++ b/meson.build
+@@ -22,7 +22,7 @@
+ 	endif
+ endif
+ 
+-seatdpath = '@0@/@1@/seatd'.format(get_option('prefix'), get_option('bindir'))
++seatdpath = '@0@/@1@/seatd'.format(get_option('prefix'), get_option('sbindir'))
+ 
+ cc = meson.get_compiler('c')
+ 

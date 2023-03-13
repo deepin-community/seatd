@@ -1,0 +1,6 @@
+#!/bin/sh
+
+[ -S /run/seatd.sock ] && service seatd stop
+
+# Ensure seatd-launch wrapper finds and runs seatd.
+SEATD_LOGLEVEL=debug seatd-launch -- sh -c 'printf "seatd PID: %d\n" $(pidof seatd)'

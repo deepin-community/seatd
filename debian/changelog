@@ -1,5 +1,111 @@
-template-repository (1.0-1) unstable; urgency=medium
+seatd (0.7.0-6) unstable; urgency=medium
 
-  * Initial release
+  * Rework initscript using init-d-script and use start-stop-daemon
+    --make-pidfile.
+  * Add DAEMON_ARGS="-g video" in /etc/default/seatd for non-systemd
+    inits.
 
- -- Tsic404 <liuheng@deepin.org>  Sat, 28 Jan 2023 13:46:49 +0800
+ -- Mark Hindley <leepen@debian.org>  Wed, 14 Dec 2022 08:14:53 +0000
+
+seatd (0.7.0-5) unstable; urgency=medium
+
+  * meson.build: use shared_library() rather than library() to avoid
+    unnecessary Requires.private in libseat.pc (Closes: #1013248).
+
+ -- Mark Hindley <leepen@debian.org>  Fri, 24 Jun 2022 12:08:37 +0100
+
+seatd (0.7.0-4) unstable; urgency=medium
+
+  * d/t/seatd-launch requires needs-root.
+  * d/t/control: remove unnecessary dependency on init-system-helpers.
+
+ -- Mark Hindley <leepen@debian.org>  Tue, 07 Jun 2022 10:30:51 +0100
+
+seatd (0.7.0-3) unstable; urgency=medium
+
+  * d/t/control: add dependency on init-system-helpers.
+
+ -- Mark Hindley <leepen@debian.org>  Tue, 31 May 2022 07:58:07 +0100
+
+seatd (0.7.0-2) unstable; urgency=medium
+
+  * d/t/seatd-launch: stop running seatd first.
+
+ -- Mark Hindley <leepen@debian.org>  Mon, 30 May 2022 10:04:16 +0100
+
+seatd (0.7.0-1) unstable; urgency=medium
+
+  * Fix typo in previous CVE number.
+  * New upstream version 0.7.0.
+  * Refresh patches.
+  * Wrap and sort.
+  * d/control: bump Standards Version (no changes).
+
+ -- Mark Hindley <leepen@debian.org>  Sun, 29 May 2022 11:09:33 +0100
+
+seatd (0.6.4-1) unstable; urgency=high
+
+  * New upstream version 0.6.4.
+    - includes fix for CVE-2022-25643: file removal with escalated privileges
+      via seatd-launch socket pathname (Closes: #1006308).
+  * Patch to workaround spurious x32 compilation error by casting.
+  * Improve autopkgtest output formatting.
+
+ -- Mark Hindley <leepen@debian.org>  Wed, 23 Feb 2022 08:09:56 +0000
+
+seatd (0.6.3-2) unstable; urgency=medium
+
+  * Use correct path to seatd in seatd-launch.
+  * Add autopkgtest using seatd-launch.
+
+ -- Mark Hindley <leepen@debian.org>  Mon, 27 Dec 2021 18:33:55 +0000
+
+seatd (0.6.3-1) unstable; urgency=medium
+
+  * New upstream version 0.6.3.
+  * Install new seatd-launch wrapper in /usr/bin/.
+  * d/rules: update for changed meson option names.
+  * d/control: Rules-Requires-Root: no.
+  * Move seatd manpage to section 8 to match installation path.
+
+ -- Mark Hindley <leepen@debian.org>  Sun, 26 Dec 2021 11:49:40 +0000
+
+seatd (0.5.0-4) unstable; urgency=medium
+
+  * d/control: update to Standards Version 4.6.0 (no changes).
+  * Build against libsystemd-dev (Closes: #994184).
+
+ -- Mark Hindley <leepen@debian.org>  Mon, 13 Sep 2021 19:06:20 +0100
+
+seatd (0.5.0-3) unstable; urgency=medium
+
+  * d/control: specify branch in Vcs-Git.
+
+ -- Mark Hindley <leepen@debian.org>  Mon, 30 Aug 2021 18:45:33 +0100
+
+seatd (0.5.0-2) experimental; urgency=medium
+
+  * Upload to Debian (Closes: #976048)
+  * Use upstream contributed seatd.service.
+  * Change to debhelper compat 13.
+  * Add symbols file for libseat1
+  * d/control: address lintian warnings
+     - fix typo.
+     - don't duplicate source Priority and Section in binary packages.
+
+ -- Mark Hindley <leepen@debian.org>  Tue, 18 May 2021 18:42:29 +0100
+
+seatd (0.5.0-1) unstable; urgency=medium
+
+  * New upstream release 0.5.0.
+  * Target unstable.
+  * Remove obsolete README.Debian.
+
+ -- Mark Hindley <mark@hindley.org.uk>  Mon, 17 May 2021 16:02:45 +0100
+
+seatd (0.4.0-1~rc1) experimental; urgency=medium
+
+  * Initial packaging for Devuan
+
+ -- Mark Hindley <mark@hindley.org.uk>  Sat, 28 Nov 2020 17:38:08 +0000
+

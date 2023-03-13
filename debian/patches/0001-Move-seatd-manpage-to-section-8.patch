@@ -1,0 +1,145 @@
+From ce4a50bfe5b5defc7ccb31d10ceed6726f17c866 Mon Sep 17 00:00:00 2001
+From: Mark Hindley <mark@hindley.org.uk>
+Date: Sun, 26 Dec 2021 12:23:31 +0000
+Subject: [PATCH] Move seatd manpage to section 8.
+
+This matches the installation path in /usr/sbin/.
+---
+ man/seatd-launch.1.scd           | 2 +-
+ man/{seatd.1.scd => seatd.8.scd} | 2 +-
+ meson.build                      | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+ rename man/{seatd.1.scd => seatd.8.scd} (99%)
+
+--- a/man/seatd-launch.1.scd
++++ b/man/seatd-launch.1.scd
+@@ -49,7 +49,7 @@
+ 
+ # SEE ALSO
+ 
+-The libseat library, *<libseat.h>*, *seatd*(1)
++The libseat library, *<libseat.h>*, *seatd*(8)
+ 
+ # AUTHORS
+ 
+--- a/man/seatd.1.scd
++++ /dev/null
+@@ -1,52 +0,0 @@
+-seatd(1)
+-
+-# NAME
+-
+-seatd - A seat management daemon
+-
+-# SYNOPSIS
+-
+-*seatd* [options]
+-
+-# OPTIONS
+-
+-*-h*
+-	Show help message and quit.
+-
+-*-n*
+-	FD to notify readiness on. A single newline will be written and the fd
+-	closed when seatd is ready to serve requests. This is compatible with
+-	s6's notification protocol.
+-
+-*-u <user>*
+-	User to own the seatd socket.
+-
+-*-g <group>*
+-	Group to own the seatd socket.
+-
+-*-l <loglevel>*
+-	Log-level to use. Must be one of debug, info, error or silent. Defaults
+-	to error.
+-
+-*-v*
+-	Show the version number and quit.
+-
+-# DESCRIPTION
+-
+-seatd provides central seat management, mediating access to shared resources
+-such as displays and input devices in a multi-session, multi-seat environment.
+-
+-seatd operates over a UNIX domain socket, with *libseat* providing the
+-client-side of the protocol.
+-
+-The location of the socket for seatd is set at compile-time.
+-
+-# SEE ALSO
+-
+-The libseat library, *<libseat.h>*, *seatd-launch*(1)
+-
+-# AUTHORS
+-
+-Maintained by Kenny Levinsen <contact@kl.wtf>, who is assisted by other
+-open-source contributors. For more information about seatd development, see
+-https://sr.ht/~kennylevinsen/seatd.
+--- /dev/null
++++ b/man/seatd.8.scd
+@@ -0,0 +1,52 @@
++seatd(8)
++
++# NAME
++
++seatd - A seat management daemon
++
++# SYNOPSIS
++
++*seatd* [options]
++
++# OPTIONS
++
++*-h*
++	Show help message and quit.
++
++*-n*
++	FD to notify readiness on. A single newline will be written and the fd
++	closed when seatd is ready to serve requests. This is compatible with
++	s6's notification protocol.
++
++*-u <user>*
++	User to own the seatd socket.
++
++*-g <group>*
++	Group to own the seatd socket.
++
++*-l <loglevel>*
++	Log-level to use. Must be one of debug, info, error or silent. Defaults
++	to error.
++
++*-v*
++	Show the version number and quit.
++
++# DESCRIPTION
++
++seatd provides central seat management, mediating access to shared resources
++such as displays and input devices in a multi-session, multi-seat environment.
++
++seatd operates over a UNIX domain socket, with *libseat* providing the
++client-side of the protocol.
++
++The location of the socket for seatd is set at compile-time.
++
++# SEE ALSO
++
++The libseat library, *<libseat.h>*, *seatd-launch*(1)
++
++# AUTHORS
++
++Maintained by Kenny Levinsen <contact@kl.wtf>, who is assisted by other
++open-source contributors. For more information about seatd development, see
++https://sr.ht/~kennylevinsen/seatd.
+--- a/meson.build
++++ b/meson.build
+@@ -263,7 +263,7 @@
+ if scdoc.found()
+ 	mandir = get_option('mandir')
+ 
+-	foreach src : ['seatd.1.scd', 'seatd-launch.1.scd']
++	foreach src : ['seatd.8.scd', 'seatd-launch.1.scd']
+ 		topic = src.split('.')[0]
+ 		section = src.split('.')[1]
+ 		output = '@0@.@1@'.format(topic, section)
