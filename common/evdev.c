@@ -23,9 +23,9 @@ int path_is_evdev(const char *path) {
 }
 
 int evdev_revoke(int fd) {
-	return ioctl(fd, EVIOCREVOKE, NULL);
+	return ioctl(fd, (int)EVIOCREVOKE, NULL);
 }
-#elif defined(__NetBSD__)
+#else
 int path_is_evdev(const char *path) {
 	(void)path;
 	return 0;
@@ -34,6 +34,4 @@ int evdev_revoke(int fd) {
 	(void)fd;
 	return 0;
 }
-#else
-#error Unsupported platform
 #endif

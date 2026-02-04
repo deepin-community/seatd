@@ -14,8 +14,8 @@ The path is hardcoded and needs to match the installation path in /usr/sbin/.
  	endif
  endif
  
--seatdpath = '@0@/@1@/seatd'.format(get_option('prefix'), get_option('bindir'))
-+seatdpath = '@0@/@1@/seatd'.format(get_option('prefix'), get_option('sbindir'))
+-seatdpath = get_option('prefix') / get_option('bindir') / 'seatd'
++seatdpath = get_option('prefix') / get_option('sbindir') / 'seatd'
  
  cc = meson.get_compiler('c')
  

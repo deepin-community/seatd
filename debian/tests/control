@@ -1,2 +1,6 @@
 Tests: seatd-launch
 Restrictions: allow-stderr, needs-root
+
+Tests: libseat-dev
+Restrictions: superficial
+Depends: build-essential, libseat-dev, pkgconf
