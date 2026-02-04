@@ -46,13 +46,13 @@ static int disable_seat(struct libseat *base) {
 
 static const char *seat_name(struct libseat *base) {
 	(void)base;
-	return "noop";
+	return "seat0";
 }
 
 static int open_device(struct libseat *base, const char *path, int *fd) {
 	(void)base;
 
-	int tmpfd = open(path, O_RDWR | O_CLOEXEC);
+	int tmpfd = open(path, O_RDWR | O_NOCTTY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
 	if (tmpfd < 0) {
 		log_errorf("Failed to open device: %s", strerror(errno));
 		return -1;
@@ -115,6 +115,7 @@ static struct libseat *noop_open_seat(const struct libseat_seat_listener *listen
 		return NULL;
 	}
 
+	backend->initial_setup = true;
 	backend->seat_listener = listener;
 	backend->seat_listener_data = data;
 	backend->base.impl = &noop_impl;

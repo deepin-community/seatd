@@ -12,6 +12,7 @@ struct client;
 enum seat_device_type {
 	SEAT_DEVICE_TYPE_NORMAL,
 	SEAT_DEVICE_TYPE_EVDEV,
+	SEAT_DEVICE_TYPE_HIDRAW,
 	SEAT_DEVICE_TYPE_DRM,
 	SEAT_DEVICE_TYPE_WSCONS,
 };
@@ -42,7 +43,7 @@ struct seat *seat_create(const char *name, bool vt_bound);
 void seat_destroy(struct seat *seat);
 
 int seat_add_client(struct seat *seat, struct client *client);
-int seat_remove_client(struct client *client);
+void seat_remove_client(struct client *client);
 int seat_open_client(struct seat *seat, struct client *client);
 int seat_ack_disable_client(struct client *client);
 

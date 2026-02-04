@@ -83,8 +83,7 @@ static struct backend_seatd *backend_seatd_from_libseat_backend(struct libseat *
 
 static void cleanup(struct backend_seatd *backend) {
 	if (backend->connection.fd != -1) {
-		close(backend->connection.fd);
-		backend->connection.fd = -1;
+		shutdown(backend->connection.fd, SHUT_RDWR);
 	}
 	connection_close_fds(&backend->connection);
 	while (!linked_list_empty(&backend->pending_events)) {
@@ -95,6 +94,11 @@ static void cleanup(struct backend_seatd *backend) {
 }
 
 static void destroy(struct backend_seatd *backend) {
+	if (backend->connection.fd != -1) {
+		close(backend->connection.fd);
+		backend->connection.fd = -1;
+	}
+
 	cleanup(backend);
 	free(backend);
 }
@@ -155,12 +159,12 @@ static size_t read_header(struct backend_seatd *backend, uint16_t expected_opcod
 	}
 	if (header.opcode != expected_opcode) {
 		struct proto_server_error msg;
-		if (header.opcode != SERVER_ERROR) {
-			log_errorf("Unexpected response: expected opcode %d, received opcode %d",
-				   expected_opcode, header.opcode);
+		if (header.opcode != SERVER_ERROR || header.size != sizeof msg) {
+			log_errorf("Unexpected response: expected opcode %d of length %zd, received opcode %d of length %d",
+				   expected_opcode, sizeof msg, header.opcode, header.size);
 			set_error(backend);
 			errno = EBADMSG;
-		} else if (header.size != sizeof msg || conn_get(backend, &msg, sizeof msg) == -1) {
+		} else if (conn_get(backend, &msg, sizeof msg) == -1) {
 			set_error(backend);
 			errno = EBADMSG;
 		} else {
@@ -222,7 +226,7 @@ static int execute_events(struct backend_seatd *backend) {
 	return executed;
 }
 
-static int dispatch_pending(struct backend_seatd *backend, int *opcode) {
+static int read_and_queue(struct backend_seatd *backend, int *opcode) {
 	int packets = 0;
 	struct proto_header header;
 	while (connection_get(&backend->connection, &header, sizeof header) != -1) {
@@ -242,8 +246,17 @@ static int dispatch_pending(struct backend_seatd *backend, int *opcode) {
 			}
 			break;
 		default:
-			if (opcode != NULL &&
-			    connection_pending(&backend->connection) >= header.size) {
+			// If we do not have an opcode pointer, the caller only
+			// expected to see background events so this would be
+			// an error and we might as well stop now. Otherwise,
+			// store the opcode once we have the full message.
+			if (opcode == NULL) {
+				log_errorf("Unexpected response: expected background event, got opcode %d",
+					   header.opcode);
+				set_error(backend);
+				errno = EBADMSG;
+				packets = -1;
+			} else if (connection_pending(&backend->connection) >= header.size) {
 				*opcode = header.opcode;
 			}
 			connection_restore(&backend->connection, sizeof header);
@@ -251,15 +264,6 @@ static int dispatch_pending(struct backend_seatd *backend, int *opcode) {
 		}
 	}
 	return packets;
-}
-
-static int dispatch_pending_and_execute(struct backend_seatd *backend) {
-	int dispatched = dispatch_pending(backend, NULL);
-	if (dispatched == -1) {
-		return -1;
-	}
-	dispatched += execute_events(backend);
-	return dispatched;
 }
 
 static int poll_connection(struct backend_seatd *backend, int timeout) {
@@ -273,6 +277,7 @@ static int poll_connection(struct backend_seatd *backend, int timeout) {
 	}
 
 	if (fd.revents & (POLLERR | POLLHUP)) {
+		set_error(backend);
 		errno = EPIPE;
 		return -1;
 	}
@@ -281,9 +286,11 @@ static int poll_connection(struct backend_seatd *backend, int timeout) {
 	if (fd.revents & POLLIN) {
 		len = connection_read(&backend->connection);
 		if (len == 0) {
+			set_error(backend);
 			errno = EIO;
 			return -1;
 		} else if (len == -1 && errno != EAGAIN) {
+			set_error(backend);
 			return -1;
 		}
 	}
@@ -291,13 +298,13 @@ static int poll_connection(struct backend_seatd *backend, int timeout) {
 	return len;
 }
 
-static int dispatch(struct backend_seatd *backend) {
+static int read_until_response(struct backend_seatd *backend) {
 	if (conn_flush(backend) == -1) {
 		return -1;
 	}
 	while (true) {
 		int opcode = 0;
-		if (dispatch_pending(backend, &opcode) == -1) {
+		if (read_and_queue(backend, &opcode) == -1) {
 			log_errorf("Could not dispatch pending messages: %s", strerror(errno));
 			return -1;
 		}
@@ -317,23 +324,26 @@ static int get_fd(struct libseat *base) {
 	return backend->connection.fd;
 }
 
-static int dispatch_and_execute(struct libseat *base, int timeout) {
+static int dispatch(struct libseat *base, int timeout) {
 	struct backend_seatd *backend = backend_seatd_from_libseat_backend(base);
 	if (backend->error) {
 		errno = ENOTCONN;
 		return -1;
 	}
 
-	int predispatch = dispatch_pending_and_execute(backend);
+	int predispatch = read_and_queue(backend, NULL);
 	if (predispatch == -1) {
-		return -1;
+		log_errorf("Could not read and queue events: %s", strerror(errno));
+		goto error;
 	}
+	predispatch += execute_events(backend);
 
 	// We don't want to block if we dispatched something, as the
 	// caller might be waiting for the result. However, we'd also
 	// like to read anything pending.
 	int read = 0;
-	if (predispatch > 0 || timeout == 0) {
+	bool immediate_read = predispatch > 0 || timeout == 0;
+	if (immediate_read) {
 		read = connection_read(&backend->connection);
 	} else {
 		read = poll_connection(backend, timeout);
@@ -342,16 +352,22 @@ static int dispatch_and_execute(struct libseat *base, int timeout) {
 	if (read == 0) {
 		return predispatch;
 	} else if (read == -1 && errno != EAGAIN) {
-		log_errorf("Could not read from connection: %s", strerror(errno));
-		return -1;
+		log_errorf("Could not %s from connection: %s", immediate_read ? "read" : "poll",
+			   strerror(errno));
+		goto error;
 	}
 
-	int postdispatch = dispatch_pending_and_execute(backend);
+	int postdispatch = read_and_queue(backend, NULL);
 	if (postdispatch == -1) {
-		return -1;
+		log_errorf("Could not read and queue events: %s", strerror(errno));
+		goto error;
 	}
+	postdispatch += execute_events(backend);
 
 	return predispatch + postdispatch;
+
+error:
+	return -1;
 }
 
 static struct libseat *_open_seat(const struct libseat_seat_listener *listener, void *data, int fd) {
@@ -373,7 +389,7 @@ static struct libseat *_open_seat(const struct libseat_seat_listener *listener, 
 		.opcode = CLIENT_OPEN_SEAT,
 		.size = 0,
 	};
-	if (conn_put(backend, &header, sizeof header) == -1 || dispatch(backend) == -1) {
+	if (conn_put(backend, &header, sizeof header) == -1 || read_until_response(backend) == -1) {
 		goto backend_error;
 	}
 
@@ -388,7 +404,24 @@ static struct libseat *_open_seat(const struct libseat_seat_listener *listener, 
 		errno = EBADMSG;
 		goto backend_error;
 	}
+	if (rmsg.seat_name_len > MAX_SEAT_LEN) {
+		log_errorf("Invalid message: seat_name too long (%d)", rmsg.seat_name_len);
+		errno = EBADMSG;
+		goto backend_error;
+	}
 	if (conn_get(backend, backend->seat_name, rmsg.seat_name_len) == -1) {
+		goto backend_error;
+	}
+	// handle old seatd gracefully (seat_name without null byte)
+	if (rmsg.seat_name_len == 0 ||
+	    (rmsg.seat_name_len < MAX_SEAT_LEN && backend->seat_name[rmsg.seat_name_len - 1] != 0)) {
+		backend->seat_name[rmsg.seat_name_len] = 0;
+		rmsg.seat_name_len++;
+	}
+	if (rmsg.seat_name_len == 0 ||
+	    strnlen(backend->seat_name, rmsg.seat_name_len) != (uint16_t)(rmsg.seat_name_len - 1)) {
+		log_error("Invalid message: seat_name not null terminated");
+		errno = EBADMSG;
 		goto backend_error;
 	}
 
@@ -412,28 +445,29 @@ static struct libseat *open_seat(const struct libseat_seat_listener *listener, v
 }
 
 static int close_seat(struct libseat *base) {
+	int res = 0;
 	struct backend_seatd *backend = backend_seatd_from_libseat_backend(base);
+	if (backend->error) {
+		res = -1;
+		goto done;
+	}
 
 	struct proto_header header = {
 		.opcode = CLIENT_CLOSE_SEAT,
 		.size = 0,
 	};
-	if (conn_put(backend, &header, sizeof header) == -1 || dispatch(backend) == -1) {
-		goto error;
+	if (conn_put(backend, &header, sizeof header) == -1 || read_until_response(backend) == -1) {
+		res = -1;
 	}
 
 	if (read_header(backend, SERVER_SEAT_CLOSED, 0, false) == SIZE_MAX) {
-		goto error;
+		res = -1;
 	}
 
+done:
 	execute_events(backend);
 	destroy(backend);
-	return 0;
-
-error:
-	execute_events(backend);
-	destroy(backend);
-	return -1;
+	return res;
 }
 
 static const char *seat_name(struct libseat *base) {
@@ -453,6 +487,9 @@ static int send_ping(struct backend_seatd *backend) {
 }
 
 static void check_pending_events(struct backend_seatd *backend) {
+	if (read_and_queue(backend, NULL) == -1) {
+		return;
+	}
 	if (linked_list_empty(&backend->pending_events)) {
 		return;
 	}
@@ -492,22 +529,21 @@ static int open_device(struct libseat *base, const char *path, int *fd) {
 	};
 	if (conn_put(backend, &header, sizeof header) == -1 ||
 	    conn_put(backend, &msg, sizeof msg) == -1 || conn_put(backend, path, pathlen) == -1 ||
-	    dispatch(backend) == -1) {
-		goto error;
+	    read_until_response(backend) == -1) {
+		return -1;
 	}
 
+	int res = 0;
 	struct proto_server_device_opened rmsg;
 	if (read_header(backend, SERVER_DEVICE_OPENED, sizeof rmsg, false) == SIZE_MAX ||
 	    conn_get(backend, &rmsg, sizeof rmsg) == -1 || conn_get_fd(backend, fd)) {
-		goto error;
+		res = -1;
+	} else {
+		res = rmsg.device_id;
 	}
 
 	check_pending_events(backend);
-	return rmsg.device_id;
-
-error:
-	check_pending_events(backend);
-	return -1;
+	return res;
 }
 
 static int close_device(struct libseat *base, int device_id) {
@@ -529,20 +565,17 @@ static int close_device(struct libseat *base, int device_id) {
 		.size = sizeof msg,
 	};
 	if (conn_put(backend, &header, sizeof header) == -1 ||
-	    conn_put(backend, &msg, sizeof msg) == -1 || dispatch(backend) == -1) {
-		goto error;
+	    conn_put(backend, &msg, sizeof msg) == -1 || read_until_response(backend) == -1) {
+		return -1;
 	}
 
+	int res = 0;
 	if (read_header(backend, SERVER_DEVICE_CLOSED, 0, false) == SIZE_MAX) {
-		goto error;
+		res = -1;
 	}
 
 	check_pending_events(backend);
-	return 0;
-
-error:
-	check_pending_events(backend);
-	return -1;
+	return res;
 }
 
 static int switch_session(struct libseat *base, int session) {
@@ -552,6 +585,7 @@ static int switch_session(struct libseat *base, int session) {
 		return -1;
 	}
 	if (session < 0) {
+		errno = EINVAL;
 		return -1;
 	}
 
@@ -563,11 +597,17 @@ static int switch_session(struct libseat *base, int session) {
 		.size = sizeof msg,
 	};
 	if (conn_put(backend, &header, sizeof header) == -1 ||
-	    conn_put(backend, &msg, sizeof msg) == -1 || conn_flush(backend) == -1) {
+	    conn_put(backend, &msg, sizeof msg) == -1 || read_until_response(backend) == -1) {
 		return -1;
 	}
 
-	return 0;
+	int res = 0;
+	if (read_header(backend, SERVER_SESSION_SWITCHED, 0, false) == SIZE_MAX) {
+		res = -1;
+	}
+
+	check_pending_events(backend);
+	return res;
 }
 
 static int disable_seat(struct libseat *base) {
@@ -580,11 +620,17 @@ static int disable_seat(struct libseat *base) {
 		.opcode = CLIENT_DISABLE_SEAT,
 		.size = 0,
 	};
-	if (conn_put(backend, &header, sizeof header) == -1 || conn_flush(backend) == -1) {
+	if (conn_put(backend, &header, sizeof header) == -1 || read_until_response(backend) == -1) {
 		return -1;
 	}
 
-	return 0;
+	int res = 0;
+	if (read_header(backend, SERVER_SEAT_DISABLED, 0, false) == SIZE_MAX) {
+		res = -1;
+	}
+
+	check_pending_events(backend);
+	return res;
 }
 
 const struct seat_impl seatd_impl = {
@@ -596,7 +642,7 @@ const struct seat_impl seatd_impl = {
 	.close_device = close_device,
 	.switch_session = switch_session,
 	.get_fd = get_fd,
-	.dispatch = dispatch_and_execute,
+	.dispatch = dispatch,
 };
 
 #ifdef BUILTIN_ENABLED
@@ -660,6 +706,6 @@ const struct seat_impl builtin_impl = {
 	.close_device = close_device,
 	.switch_session = switch_session,
 	.get_fd = get_fd,
-	.dispatch = dispatch_and_execute,
+	.dispatch = dispatch,
 };
 #endif
