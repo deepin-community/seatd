@@ -13,7 +13,7 @@ seatd - A seat management daemon
 *-h*
 	Show help message and quit.
 
-*-n*
+*-n <fd>*
 	FD to notify readiness on. A single newline will be written and the fd
 	closed when seatd is ready to serve requests. This is compatible with
 	s6's notification protocol.
@@ -40,6 +40,11 @@ seatd operates over a UNIX domain socket, with *libseat* providing the
 client-side of the protocol.
 
 The location of the socket for seatd is set at compile-time.
+
+# ENVIRONMENT
+
+*SEATD_VTBOUND*
+	If set to "0", the seat will not be bound to a VT.
 
 # SEE ALSO
 

@@ -28,14 +28,6 @@
 #include "libseat.h"
 #include "log.h"
 
-static int dev_major_is_drm(unsigned int dev_major) {
-	return dev_major == 226;
-}
-
-static int dev_is_drm(dev_t device) {
-	return dev_major_is_drm(major(device));
-}
-
 struct backend_logind {
 	struct libseat base;
 	const struct libseat_seat_listener *seat_listener;
@@ -49,12 +41,14 @@ struct backend_logind {
 
 	bool active;
 	bool initial_setup;
-	int has_drm;
 };
 
 const struct seat_impl logind_impl;
-static struct backend_logind *backend_logind_from_libseat_backend(struct libseat *base);
-static void release_control(struct backend_logind *backend);
+
+static struct backend_logind *backend_logind_from_libseat_backend(struct libseat *base) {
+	assert(base->impl == &logind_impl);
+	return (struct backend_logind *)base;
+}
 
 static void destroy(struct backend_logind *backend) {
 	assert(backend);
@@ -66,13 +60,6 @@ static void destroy(struct backend_logind *backend) {
 	free(backend->path);
 	free(backend->seat_path);
 	free(backend);
-}
-
-static int close_seat(struct libseat *base) {
-	struct backend_logind *backend = backend_logind_from_libseat_backend(base);
-	release_control(backend);
-	destroy(backend);
-	return 0;
 }
 
 static int ping_handler(sd_bus_message *m, void *userdata, sd_bus_error *ret_error) {
@@ -90,10 +77,7 @@ static int send_ping(struct backend_logind *backend) {
 	int ret = sd_bus_call_method_async(backend->bus, NULL, "org.freedesktop.login1",
 					   "/org/freedesktop/login1", "org.freedesktop.DBus.Peer",
 					   "Ping", ping_handler, backend, "");
-	if (ret < 0) {
-		return ret;
-	}
-	return 0;
+	return ret < 0 ? ret : 0;
 }
 
 static void check_pending_events(struct backend_logind *backend) {
@@ -135,7 +119,6 @@ static int open_device(struct libseat *base, const char *path, int *fd) {
 				 major(st.st_rdev), minor(st.st_rdev));
 	if (ret < 0) {
 		log_errorf("Could not take device: %s", error.message);
-		tmpfd = -1;
 		goto out;
 	}
 
@@ -143,7 +126,6 @@ static int open_device(struct libseat *base, const char *path, int *fd) {
 	ret = sd_bus_message_read(msg, "hb", &tmpfd, &paused);
 	if (ret < 0) {
 		log_errorf("Could not parse D-Bus response: %s", strerror(-ret));
-		tmpfd = -1;
 		goto out;
 	}
 
@@ -151,14 +133,9 @@ static int open_device(struct libseat *base, const char *path, int *fd) {
 	// so we just clone it.
 	tmpfd = fcntl(tmpfd, F_DUPFD_CLOEXEC, 0);
 	if (tmpfd < 0) {
-		log_errorf("Could not duplicate fd: %s", strerror(errno));
-		tmpfd = -1;
+		ret = -errno;
+		log_errorf("Could not duplicate fd: %s", strerror(-ret));
 		goto out;
-	}
-
-	if (dev_is_drm(st.st_rdev)) {
-		session->has_drm++;
-		log_debugf("DRM device opened, current total: %d", session->has_drm);
 	}
 
 	*fd = tmpfd;
@@ -167,6 +144,10 @@ out:
 	sd_bus_error_free(&error);
 	sd_bus_message_unref(msg);
 	check_pending_events(session);
+	if (ret < 0) {
+		errno = -ret;
+		return -1;
+	}
 	return tmpfd;
 }
 
@@ -184,11 +165,6 @@ static int close_device(struct libseat *base, int device_id) {
 		log_errorf("Could not stat fd %d", fd);
 		return -1;
 	}
-	if (dev_is_drm(st.st_rdev)) {
-		session->has_drm--;
-		log_debugf("DRM device closed, current total: %d", session->has_drm);
-		assert(session->has_drm >= 0);
-	}
 
 	sd_bus_message *msg = NULL;
 	sd_bus_error error = SD_BUS_ERROR_NULL;
@@ -202,7 +178,11 @@ static int close_device(struct libseat *base, int device_id) {
 	sd_bus_error_free(&error);
 	sd_bus_message_unref(msg);
 	check_pending_events(session);
-	return ret < 0 ? -1 : 0;
+	if (ret < 0) {
+		errno = -ret;
+		return -1;
+	}
+	return 0;
 }
 
 static int switch_session(struct libseat *base, int s) {
@@ -225,7 +205,11 @@ static int switch_session(struct libseat *base, int s) {
 	sd_bus_error_free(&error);
 	sd_bus_message_unref(msg);
 	check_pending_events(session);
-	return ret < 0 ? -1 : 0;
+	if (ret < 0) {
+		errno = -ret;
+		return -1;
+	}
+	return 0;
 }
 
 static int disable_seat(struct libseat *base) {
@@ -301,44 +285,20 @@ static const char *seat_name(struct libseat *base) {
 	return backend->seat;
 }
 
-static struct backend_logind *backend_logind_from_libseat_backend(struct libseat *base) {
-	assert(base->impl == &logind_impl);
-	return (struct backend_logind *)base;
-}
-
-static int session_activate(struct backend_logind *session) {
-	sd_bus_message *msg = NULL;
+static int session_get_active(struct backend_logind *session, bool *active) {
 	sd_bus_error error = SD_BUS_ERROR_NULL;
-
-	// Note: the Activate call might not make the session active immediately
-	int ret = sd_bus_call_method(session->bus, "org.freedesktop.login1", session->path,
-				     "org.freedesktop.login1.Session", "Activate", &error, &msg, "");
-	if (ret < 0) {
-		log_errorf("Could not activate session: %s", error.message);
-	}
-
-	sd_bus_error_free(&error);
-	sd_bus_message_unref(msg);
-	return ret;
-}
-
-static int session_check_active(struct backend_logind *session) {
-	sd_bus_error error = SD_BUS_ERROR_NULL;
-	int active = 0;
 	int ret = sd_bus_get_property_trivial(session->bus, "org.freedesktop.login1", session->path,
 					      "org.freedesktop.login1.Session", "Active", &error,
-					      'b', &active);
+					      'b', active);
 	if (ret < 0) {
 		log_errorf("Could not check if session is active: %s", error.message);
-	} else {
-		session->active = (bool)active;
 	}
 
 	sd_bus_error_free(&error);
 	return ret;
 }
 
-static int take_control(struct backend_logind *session) {
+static int session_take_control(struct backend_logind *session) {
 	sd_bus_message *msg = NULL;
 	sd_bus_error error = SD_BUS_ERROR_NULL;
 
@@ -354,7 +314,7 @@ static int take_control(struct backend_logind *session) {
 	return ret;
 }
 
-static void release_control(struct backend_logind *session) {
+static void session_release_control(struct backend_logind *session) {
 	sd_bus_message *msg = NULL;
 	sd_bus_error error = SD_BUS_ERROR_NULL;
 
@@ -367,6 +327,22 @@ static void release_control(struct backend_logind *session) {
 
 	sd_bus_error_free(&error);
 	sd_bus_message_unref(msg);
+}
+
+static int session_set_type(struct backend_logind *backend, const char *type) {
+	sd_bus_message *msg = NULL;
+	sd_bus_error error = SD_BUS_ERROR_NULL;
+
+	int ret = sd_bus_call_method(backend->bus, "org.freedesktop.login1", backend->path,
+				     "org.freedesktop.login1.Session", "SetType", &error, &msg, "s",
+				     type);
+	if (ret < 0) {
+		log_errorf("Could not set session type: %s", error.message);
+	}
+
+	sd_bus_error_free(&error);
+	sd_bus_message_unref(msg);
+	return ret;
 }
 
 static void set_active(struct backend_logind *backend, bool active) {
@@ -384,7 +360,7 @@ static void set_active(struct backend_logind *backend, bool active) {
 	}
 }
 
-static int pause_device(sd_bus_message *msg, void *userdata, sd_bus_error *ret_error) {
+static int handle_pause_device(sd_bus_message *msg, void *userdata, sd_bus_error *ret_error) {
 	struct backend_logind *session = userdata;
 
 	uint32_t major, minor;
@@ -395,16 +371,31 @@ static int pause_device(sd_bus_message *msg, void *userdata, sd_bus_error *ret_e
 		return 0;
 	}
 
-	if (dev_major_is_drm(major) && strcmp(type, "gone") != 0) {
-		log_debugf("DRM device paused: %s", type);
-		assert(session->has_drm > 0);
-		set_active(session, false);
+	// The device pause is associated with one of three causes:
+	// - gone, which indicates that the device has been removed
+	// - force, which indicates that our access to the device has been removed
+	// - pause, which asks us to gracefully give up access to the device
+	bool gone = strcmp(type, "gone") == 0;
+	bool pause = strcmp(type, "pause") == 0;
+	if (gone) {
+		log_debugf("Device removed: %d:%d", major, minor);
+		return 0;
 	}
 
-	if (strcmp(type, "pause") == 0) {
+	log_debugf("Device paused (%s): %d:%d", type, major, minor);
+
+	if (pause) {
+		// We need to send PauseDeviceComplete after suspending
+		// devices. For now, let's assume that running the disable_seat
+		// handler will close everything immediately. The "right" thing
+		// to do is to queue up pause completions until the seat user
+		// called disable_seat to acknowledge the session being dead.
+		// When "force" is sent, we don't need to ack and can just rely
+		// on the coming Active session property change.
+		set_active(session, false);
 		ret = sd_bus_call_method(session->bus, "org.freedesktop.login1", session->path,
 					 "org.freedesktop.login1.Session", "PauseDeviceComplete",
-					 ret_error, &msg, "uu", major, minor);
+					 ret_error, NULL, "uu", major, minor);
 		if (ret < 0) {
 			log_errorf("Could not send PauseDeviceComplete signal: %s",
 				   ret_error->message);
@@ -414,47 +405,19 @@ static int pause_device(sd_bus_message *msg, void *userdata, sd_bus_error *ret_e
 	return 0;
 }
 
-static int resume_device(sd_bus_message *msg, void *userdata, sd_bus_error *ret_error) {
-	(void)ret_error;
-	struct backend_logind *session = userdata;
-	int ret;
-
-	int fd;
-	uint32_t major, minor;
-	ret = sd_bus_message_read(msg, "uuh", &major, &minor, &fd);
-	if (ret < 0) {
-		log_errorf("Could not parse D-Bus response: %s", strerror(-ret));
-		return 0;
-	}
-
-	if (dev_major_is_drm(major)) {
-		log_debug("DRM device resumed");
-		assert(session->has_drm > 0);
-		set_active(session, true);
-	}
-
-	return 0;
-}
-
-static int properties_changed(sd_bus_message *msg, void *userdata, sd_bus_error *ret_error) {
+static int handle_properties_changed(sd_bus_message *msg, void *userdata, sd_bus_error *ret_error) {
 	(void)ret_error;
 	struct backend_logind *session = userdata;
 	int ret = 0;
 
-	if (session->has_drm > 0) {
-		return 0;
-	}
-
 	// PropertiesChanged arg 1: interface
 	const char *interface;
-	ret = sd_bus_message_read_basic(msg, 's', &interface); // skip path
+	ret = sd_bus_message_read_basic(msg, 's', &interface);
 	if (ret < 0) {
 		goto error;
 	}
 
-	bool is_session = strcmp(interface, "org.freedesktop.login1.Session") == 0;
-	bool is_seat = strcmp(interface, "org.freedesktop.login1.Seat") == 0;
-	if (!is_session || !is_seat) {
+	if (strcmp(interface, "org.freedesktop.login1.Session") != 0) {
 		// not interesting for us; ignore
 		return 0;
 	}
@@ -471,9 +434,8 @@ static int properties_changed(sd_bus_message *msg, void *userdata, sd_bus_error 
 		if (ret < 0) {
 			goto error;
 		}
-
-		if (is_session && strcmp(s, "Active") == 0) {
-			int ret;
+		if (strcmp(s, "Active") == 0) {
+			const char *field = "Active";
 			ret = sd_bus_message_enter_container(msg, 'v', "b");
 			if (ret < 0) {
 				goto error;
@@ -485,11 +447,18 @@ static int properties_changed(sd_bus_message *msg, void *userdata, sd_bus_error 
 				goto error;
 			}
 
-			log_debugf("%s state changed: %d", s, value);
+			log_debugf("%s state changed: %d", field, value);
 			set_active(session, value);
-			return 0;
+			ret = sd_bus_message_exit_container(msg);
+			if (ret < 0) {
+				goto error;
+			}
+
 		} else {
-			sd_bus_message_skip(msg, "{sv}");
+			ret = sd_bus_message_skip(msg, "v");
+			if (ret < 0) {
+				goto error;
+			}
 		}
 
 		ret = sd_bus_message_exit_container(msg);
@@ -497,7 +466,6 @@ static int properties_changed(sd_bus_message *msg, void *userdata, sd_bus_error 
 			goto error;
 		}
 	}
-
 	if (ret < 0) {
 		goto error;
 	}
@@ -508,9 +476,13 @@ static int properties_changed(sd_bus_message *msg, void *userdata, sd_bus_error 
 	}
 
 	// PropertiesChanged arg 3: changed properties without values
-	sd_bus_message_enter_container(msg, 'a', "s");
+	ret = sd_bus_message_enter_container(msg, 'a', "s");
+	if (ret < 0) {
+		goto error;
+	}
+
 	while ((ret = sd_bus_message_read_basic(msg, 's', &s)) > 0) {
-		if (is_session && strcmp(s, "Active") == 0) {
+		if (strcmp(s, "Active") == 0) {
 			sd_bus_error error = SD_BUS_ERROR_NULL;
 			const char *obj = "org.freedesktop.login1.Session";
 			const char *field = "Active";
@@ -520,15 +492,23 @@ static int properties_changed(sd_bus_message *msg, void *userdata, sd_bus_error 
 							  &value);
 			if (ret < 0) {
 				log_errorf("Could not get '%s' property: %s", field, error.message);
-				return 0;
+				continue;
 			}
 
 			log_debugf("%s state changed: %d", field, value);
 			set_active(session, value);
-			return 0;
 		}
 	}
+	if (ret < 0) {
+		goto error;
+	}
 
+	ret = sd_bus_message_exit_container(msg);
+	if (ret < 0) {
+		goto error;
+	}
+
+	return 0;
 error:
 	if (ret < 0) {
 		log_errorf("Could not parse D-Bus PropertiesChanged: %s", strerror(-ret));
@@ -544,28 +524,14 @@ static int add_signal_matches(struct backend_logind *backend) {
 	int ret;
 
 	ret = sd_bus_match_signal(backend->bus, NULL, logind, backend->path, session_interface,
-				  "PauseDevice", pause_device, backend);
-	if (ret < 0) {
-		log_errorf("Could not add D-Bus match: %s", strerror(-ret));
-		return ret;
-	}
-
-	ret = sd_bus_match_signal(backend->bus, NULL, logind, backend->path, session_interface,
-				  "ResumeDevice", resume_device, backend);
+				  "PauseDevice", handle_pause_device, backend);
 	if (ret < 0) {
 		log_errorf("Could not add D-Bus match: %s", strerror(-ret));
 		return ret;
 	}
 
 	ret = sd_bus_match_signal(backend->bus, NULL, logind, backend->path, property_interface,
-				  "PropertiesChanged", properties_changed, backend);
-	if (ret < 0) {
-		log_errorf("Could not add D-Bus match: %s", strerror(-ret));
-		return ret;
-	}
-
-	ret = sd_bus_match_signal(backend->bus, NULL, logind, backend->seat_path, property_interface,
-				  "PropertiesChanged", properties_changed, backend);
+				  "PropertiesChanged", handle_properties_changed, backend);
 	if (ret < 0) {
 		log_errorf("Could not add D-Bus match: %s", strerror(-ret));
 		return ret;
@@ -574,7 +540,7 @@ static int add_signal_matches(struct backend_logind *backend) {
 	return 0;
 }
 
-static int find_session_path(struct backend_logind *session) {
+static int manager_get_session_path(struct backend_logind *session, char **session_path) {
 	int ret;
 	sd_bus_message *msg = NULL;
 	sd_bus_error error = SD_BUS_ERROR_NULL;
@@ -593,7 +559,11 @@ static int find_session_path(struct backend_logind *session) {
 		log_errorf("Could not parse D-Bus response: %s", strerror(-ret));
 		goto out;
 	}
-	session->path = strdup(path);
+	free(*session_path);
+	*session_path = strdup(path);
+	if (*session_path == NULL) {
+		ret = -ENOMEM;
+	}
 
 out:
 	sd_bus_error_free(&error);
@@ -602,7 +572,7 @@ out:
 	return ret;
 }
 
-static int find_seat_path(struct backend_logind *session) {
+static int manager_get_seat_path(struct backend_logind *session, char **seat_path) {
 	int ret;
 	sd_bus_message *msg = NULL;
 	sd_bus_error error = SD_BUS_ERROR_NULL;
@@ -621,7 +591,11 @@ static int find_seat_path(struct backend_logind *session) {
 		log_errorf("Could not parse D-Bus response: %s", strerror(-ret));
 		goto out;
 	}
-	session->seat_path = strdup(path);
+	free(*seat_path);
+	*seat_path = strdup(path);
+	if (*seat_path == NULL) {
+		ret = -ENOMEM;
+	}
 
 out:
 	sd_bus_error_free(&error);
@@ -643,6 +617,10 @@ static int get_display_session(char **session_id) {
 			goto error;
 		}
 		*session_id = strdup(xdg_session_id);
+		if (*session_id == NULL) {
+			ret = -ENOMEM;
+			goto error;
+		}
 		goto success;
 	}
 
@@ -671,22 +649,6 @@ error:
 	return ret;
 }
 
-static int set_type(struct backend_logind *backend, const char *type) {
-	sd_bus_message *msg = NULL;
-	sd_bus_error error = SD_BUS_ERROR_NULL;
-
-	int ret = sd_bus_call_method(backend->bus, "org.freedesktop.login1", backend->path,
-				     "org.freedesktop.login1.Session", "SetType", &error, &msg, "s",
-				     type);
-	if (ret < 0) {
-		log_errorf("Could not set session type: %s", error.message);
-	}
-
-	sd_bus_error_free(&error);
-	sd_bus_message_unref(msg);
-	return ret;
-}
-
 static struct libseat *logind_open_seat(const struct libseat_seat_listener *listener, void *data) {
 	struct backend_logind *backend = calloc(1, sizeof(struct backend_logind));
 	if (backend == NULL) {
@@ -709,12 +671,12 @@ static struct libseat *logind_open_seat(const struct libseat_seat_listener *list
 		goto error;
 	}
 
-	ret = find_session_path(backend);
+	ret = manager_get_session_path(backend, &backend->path);
 	if (ret < 0) {
 		goto error;
 	}
 
-	ret = find_seat_path(backend);
+	ret = manager_get_seat_path(backend, &backend->seat_path);
 	if (ret < 0) {
 		goto error;
 	}
@@ -724,24 +686,19 @@ static struct libseat *logind_open_seat(const struct libseat_seat_listener *list
 		goto error;
 	}
 
-	ret = session_activate(backend);
+	ret = session_get_active(backend, &backend->active);
 	if (ret < 0) {
 		goto error;
 	}
 
-	ret = session_check_active(backend);
-	if (ret < 0) {
-		goto error;
-	}
-
-	ret = take_control(backend);
+	ret = session_take_control(backend);
 	if (ret < 0) {
 		goto error;
 	}
 
 	const char *env = getenv("XDG_SESSION_TYPE");
 	if (env != NULL) {
-		set_type(backend, env);
+		session_set_type(backend, env);
 	}
 
 	backend->initial_setup = true;
@@ -756,6 +713,13 @@ error:
 	destroy(backend);
 	errno = -ret;
 	return NULL;
+}
+
+static int close_seat(struct libseat *base) {
+	struct backend_logind *backend = backend_logind_from_libseat_backend(base);
+	session_release_control(backend);
+	destroy(backend);
+	return 0;
 }
 
 const struct seat_impl logind_impl = {

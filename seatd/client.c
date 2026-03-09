@@ -114,10 +114,10 @@ void client_destroy(struct client *client) {
 		close(client->connection.fd);
 		client->connection.fd = -1;
 	}
-	linked_list_remove(&client->link);
 	if (client->seat != NULL) {
 		seat_remove_client(client);
 	}
+	linked_list_remove(&client->link);
 	if (client->event_source != NULL) {
 		event_source_fd_destroy(client->event_source);
 		client->event_source = NULL;
@@ -172,16 +172,12 @@ static int handle_open_seat(struct client *client) {
 		log_errorf("Could not find seat named %s", seat_name);
 		return -1;
 	}
-
 	if (seat_add_client(seat, client) == -1) {
 		log_errorf("Could not add client to target seat: %s", strerror(errno));
 		return -1;
 	}
-	linked_list_remove(&client->link);
-	linked_list_insert(&seat->clients, &client->link);
 
-	size_t seat_name_len = strlen(seat_name);
-
+	size_t seat_name_len = strlen(seat_name) + 1;
 	struct proto_server_seat_opened rmsg = {
 		.seat_name_len = (uint16_t)seat_name_len,
 	};
@@ -206,12 +202,7 @@ static int handle_close_seat(struct client *client) {
 		log_error("Protocol error: no seat associated with client");
 		return -1;
 	}
-
-	linked_list_remove(&client->link);
-	if (seat_remove_client(client) == -1) {
-		log_error("Could not remove client from seat");
-		return -1;
-	}
+	seat_remove_client(client);
 	linked_list_insert(&client->server->idle_clients, &client->link);
 
 	struct proto_header header = {
@@ -236,14 +227,14 @@ static int handle_open_device(struct client *client, char *path) {
 	struct seat_device *device = seat_open_device(client, path);
 	if (device == NULL) {
 		log_errorf("Could not open device: %s", strerror(errno));
-		goto fail;
+		return client_send_error(client, errno);
 	}
 
 	int dupfd = dup(device->fd);
 	if (dupfd == -1) {
 		log_errorf("Could not dup fd: %s", strerror(errno));
 		seat_close_device(client, device);
-		goto fail;
+		return client_send_error(client, errno);
 	}
 
 	if (connection_put_fd(&client->connection, dupfd) == -1) {
@@ -266,9 +257,6 @@ static int handle_open_device(struct client *client, char *path) {
 	}
 
 	return 0;
-
-fail:
-	return client_send_error(client, errno);
 }
 
 static int handle_close_device(struct client *client, int device_id) {
@@ -280,14 +268,10 @@ static int handle_close_device(struct client *client, int device_id) {
 	struct seat_device *device = seat_find_device(client, device_id);
 	if (device == NULL) {
 		log_error("No such device");
-		errno = EBADF;
-		goto fail;
+		return client_send_error(client, EBADF);
 	}
 
-	if (seat_close_device(client, device) == -1) {
-		log_errorf("Could not close device: %s", strerror(errno));
-		goto fail;
-	}
+	seat_close_device(client, device);
 
 	struct proto_header header = {
 		.opcode = SERVER_DEVICE_CLOSED,
@@ -300,9 +284,6 @@ static int handle_close_device(struct client *client, int device_id) {
 	}
 
 	return 0;
-
-fail:
-	return client_send_error(client, errno);
 }
 
 static int handle_switch_session(struct client *client, int session) {
@@ -312,13 +293,20 @@ static int handle_switch_session(struct client *client, int session) {
 	}
 
 	if (seat_set_next_session(client, session) == -1) {
-		goto error;
+		return client_send_error(client, errno);
+	}
+
+	struct proto_header header = {
+		.opcode = SERVER_SESSION_SWITCHED,
+		.size = 0,
+	};
+
+	if (connection_put(&client->connection, &header, sizeof header) == -1) {
+		log_errorf("Could not write response: %s", strerror(errno));
+		return -1;
 	}
 
 	return 0;
-
-error:
-	return client_send_error(client, errno);
 }
 
 static int handle_disable_seat(struct client *client) {
@@ -328,13 +316,20 @@ static int handle_disable_seat(struct client *client) {
 	}
 
 	if (seat_ack_disable_client(client) == -1) {
-		goto error;
+		return client_send_error(client, errno);
+	}
+
+	struct proto_header header = {
+		.opcode = SERVER_SEAT_DISABLED,
+		.size = 0,
+	};
+
+	if (connection_put(&client->connection, &header, sizeof header) == -1) {
+		log_errorf("Could not write response: %s", strerror(errno));
+		return -1;
 	}
 
 	return 0;
-
-error:
-	return client_send_error(client, errno);
 }
 
 static int handle_ping(struct client *client) {
@@ -373,13 +368,25 @@ static int client_handle_opcode(struct client *client, uint16_t opcode, size_t s
 	case CLIENT_OPEN_DEVICE: {
 		char path[MAX_PATH_LEN];
 		struct proto_client_open_device msg;
-		if (sizeof msg > size || connection_get(&client->connection, &msg, sizeof msg) == -1 ||
-		    sizeof msg + msg.path_len > size || msg.path_len > MAX_PATH_LEN) {
+		if (sizeof msg > size || connection_get(&client->connection, &msg, sizeof msg) == -1) {
 			log_error("Protocol error: invalid open_device message");
+			return -1;
+		}
+		if (msg.path_len != size - sizeof msg) {
+			log_errorf("Protocol error: device path_len does not match remaining message size (%d != %zd)",
+				   msg.path_len, size);
+			return -1;
+		}
+		if (msg.path_len > MAX_PATH_LEN) {
+			log_errorf("Protocol error: device path too long: (%d)", msg.path_len);
 			return -1;
 		}
 		if (connection_get(&client->connection, path, msg.path_len) == -1) {
 			log_error("Protocol error: invalid open_device message");
+			return -1;
+		}
+		if (msg.path_len == 0 || strnlen(path, msg.path_len) != (uint16_t)(msg.path_len - 1)) {
+			log_error("Protocol error: device path not null terminated");
 			return -1;
 		}
 
@@ -388,7 +395,8 @@ static int client_handle_opcode(struct client *client, uint16_t opcode, size_t s
 	}
 	case CLIENT_CLOSE_DEVICE: {
 		struct proto_client_close_device msg;
-		if (sizeof msg > size || connection_get(&client->connection, &msg, sizeof msg) == -1) {
+		if (sizeof msg != size ||
+		    connection_get(&client->connection, &msg, sizeof msg) == -1) {
 			log_error("Protocol error: invalid close_device message");
 			return -1;
 		}
@@ -398,7 +406,8 @@ static int client_handle_opcode(struct client *client, uint16_t opcode, size_t s
 	}
 	case CLIENT_SWITCH_SESSION: {
 		struct proto_client_switch_session msg;
-		if (sizeof msg > size || connection_get(&client->connection, &msg, sizeof msg) == -1) {
+		if (sizeof msg != size ||
+		    connection_get(&client->connection, &msg, sizeof msg) == -1) {
 			log_error("Protocol error: invalid switch_session message");
 			return -1;
 		}

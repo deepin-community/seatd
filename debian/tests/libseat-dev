@@ -1,0 +1,26 @@
+#!/bin/sh
+
+# Basic libseat-dev compile, link and run.
+
+set -eu
+
+if [ -n "${DEB_HOST_GNU_TYPE:-}" ]; then
+    CROSS_COMPILE="$DEB_HOST_GNU_TYPE-"
+else
+    CROSS_COMPILE=
+fi
+
+cat <<EOF > "$AUTOPKGTEST_TMP/build_test.c"
+#include "libseat.h"
+int main(){
+    libseat_set_log_level(LIBSEAT_LOG_LEVEL_DEBUG);
+}
+EOF
+
+# Deliberately split pkg-config into words:
+# shellcheck disable=SC2046
+"${CROSS_COMPILE}gcc" -o "$AUTOPKGTEST_TMP/build_test" "$AUTOPKGTEST_TMP/build_test.c" -Wall -Werror $("${CROSS_COMPILE}pkg-config" --cflags --libs libseat)
+echo "build: OK"
+[ -x "$AUTOPKGTEST_TMP/build_test" ]
+"$AUTOPKGTEST_TMP/build_test"
+echo "run: OK"
