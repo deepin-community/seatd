@@ -1,14 +1,52 @@
-seatd (0.7.0-6deepin1) unstable; urgency=medium
+seatd (0.9.3-1) unstable; urgency=medium
 
-  * Disable seatd.service for default
+  * New upstream version 0.9.3
 
- -- Dingyuan Zhang <zhangdingyuan@uniontech.com>  Thu, 20 May 2025 16:35:00 +0000
+ -- Mark Hindley <leepen@debian.org>  Tue, 03 Mar 2026 11:04:34 +0000
 
-seatd (0.7.0-deepin1-1) unstable; urgency=medium
+seatd (0.9.2-2) unstable; urgency=medium
 
-  * Disable seatd.service for default
+  * d/rules: use dh_installinit --no-stop-on-upgrade. (Closes: #1125426)
 
- -- Dingyuan Zhang <zhangdingyuan@uniontech.com>  Mon, 19 May 2025 16:35:00 +0000
+ -- Mark Hindley <leepen@debian.org>  Wed, 14 Jan 2026 08:26:52 +0000
+
+seatd (0.9.2-1) unstable; urgency=medium
+
+  * New upstream version.
+  * d/control:
+    - bump Standards Version (drop Prioity: Optional now it is the
+      default)
+    - only build-depend libsystemd-dev on linux.
+    - update descriptions to be clearer that only seats are managed.
+  * d/copyright: remove old FSF address (lintian).
+
+ -- Mark Hindley <leepen@debian.org>  Tue, 06 Jan 2026 10:16:08 +0000
+
+seatd (0.9.1-1) unstable; urgency=medium
+
+  * New upstream version 0.9.1.
+  * d/t: add basic test of libseat-dev.
+  * d/control: bump Standards Version (no changes).
+  * Change pkg-config dependencies to pkgconf.
+
+ -- Mark Hindley <leepen@debian.org>  Thu, 31 Oct 2024 07:16:35 +0000
+
+seatd (0.9.0-1) unstable; urgency=medium
+
+  * New upstream version.
+  * d/contol: update Homepage. (Closes: #1037089)
+
+ -- Mark Hindley <leepen@debian.org>  Fri, 17 Nov 2023 10:42:32 +0000
+
+seatd (0.8.0-1) unstable; urgency=medium
+
+  * New upstream version.
+  * Refresh patches.
+  * d/control:
+    - bump Standards Version (no changes).
+    - drop obsolete lsb-base dependency.
+
+ -- Mark Hindley <leepen@debian.org>  Mon, 31 Jul 2023 14:45:00 +0100
 
 seatd (0.7.0-6) unstable; urgency=medium
 
