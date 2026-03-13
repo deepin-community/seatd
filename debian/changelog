@@ -1,3 +1,9 @@
+seatd (0.9.3-1deepin1) unstable; urgency=medium
+
+  *  Disable seatd.service for default.
+
+ -- tunaichao <tunaichao@uniontech.com>  Fri, 13 Mar 2026 15:24:42 +0800
+
 seatd (0.9.3-1) unstable; urgency=medium
 
   * New upstream version 0.9.3
